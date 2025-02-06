@@ -1,0 +1,169 @@
+---
+title: "HW2-exploration.qmd"
+author: "Michelle Yiv"
+format:
+  html:
+    embed-resources: true 
+editor: source
+editor_options: 
+  chunk_output_type: console
+---
+
+## Setup
+
+```{r setup, include=FALSE} 
+knitr::opts_chunk$set(warning = FALSE, message = FALSE) 
+```
+
+```{r}
+# Load libraries
+
+library(tidyverse)
+library(here)
+library(janitor)
+library(dplyr)
+
+library(stars)
+library(terra)
+library(tmap)
+library(stars)
+library(sf)
+```
+
+## Read in and wrangle data
+
+```{r}
+# Path to the geodatabase folder
+gdb_path <- here('data/PMEP_estuary.gdb')
+
+# List all layers (tables and feature classes) in the geodatabase
+layers <- st_layers(gdb_path)
+
+# Read in data 
+estuary <- st_read(
+  dsn = gdb_path,
+  layer = "PMEP_West_Coast_USA_Estuarine_Biotic_Habitat_Vers1_2"
+) %>% clean_names()
+```
+
+```{r}
+# Clean the data set
+estuary <- estuary %>%
+# Drop extra columns
+  select(-c('data_source', 'cmecs_bc_code', 'cmecs_link', 'data_source_vers', 'pmep_estuary_id', 'link', 'cmecs_id', 'acres', 'pmep_poly_id')) %>%
+# Rename columns to be more intuitive
+  rename(
+    name = estuary_name,
+    biotic_comp = cmecs_bc_name,
+    level = cmecs_level,
+    setting = cmecs_bc_setting,
+    class = cmecs_bc_class,
+    subclass = cmecs_bc_subclass,
+    group = cmecs_bc_group,
+    community = cmecs_bc_community,
+    modifier = cmecs_bc_modifier,
+    area_hectares = hectares, # Will convert to km2
+    year_data = data_year,
+    year_nwi = nwi_year,
+    habitat_percent = habitat_source_percent,
+    length_shape = shape_length,
+    area_shape = shape_area,
+    shape = Shape
+  ) %>%
+  # Convert area to km2
+    mutate(area_km2 = area_hectares * 0.01) %>%  
+    select(-area_hectares) %>%
+  # Convert N/A values to true NAs
+    mutate(across(where(is.character), ~ na_if(., "N/A")))
+```
+
+## Exploratory data visualizations
+
+```{r}
+# Visualization 1: Substrate Groups as a simple bar chart
+estuary %>% 
+  mutate(group = na_if(group, "")) %>%  # Convert empty strings to NA
+  filter(!is.na(group)) %>% # Remove NA values
+# Plot the data
+  ggplot(aes(x = fct_reorder(group, group, .fun = length), fill = group)) +
+  geom_bar() +
+  coord_flip() + # Flip to account for longer labels             
+  labs(title = "Biotic Groups", x = "Groups", y = "Count",
+       caption = "Source: Pacific Marine and Estuarine Fish Habitat Partnership",
+       subtitle = "Regularly Recurring Biological Features") +
+  scale_y_continuous(expand = c(0, NA), limits = c(0, 160000)) + # Expand axis to make room for eelgrass
+  geom_text(stat = "count", aes(label = ..count..), hjust = -0.1, vjust = 0.5,
+            size = 3) +
+  scale_fill_manual(values = c('#C4A9C2','#D8C397', '#A5CEA4','#3BAF85','#91A2D5')) + theme_minimal() +  
+  theme(legend.position = "none") 
+```
+
+```{r}
+# Visualization #2: Biotic Components - Looking at the makeup of groups
+
+# Generate counts for easier plotting
+estuary_counts <- estuary %>%
+  st_drop_geometry() %>% # Geometry is unnecessary for these plots
+  count(biotic_comp) %>%
+  filter(!is.na(biotic_comp)) %>%
+  mutate(biotic_comp = fct_reorder(biotic_comp, n))
+
+# Create the lollipop chart
+ggplot(estuary_counts, aes(x = biotic_comp, y = n)) +
+  geom_segment(aes(xend = biotic_comp, y = 0, yend = n), color = "#91A2D5") + 
+  geom_point(color = "#91A2D5", size = 3) +
+  geom_text(aes(label = scales::comma(n)), hjust = -0.3, vjust = 0.5, size = 3) +
+  coord_flip() +                
+  labs(title = "Biotic Component Levels", x = "Biotic Component Unit", y = "Count",
+       caption = "Source: Pacific Marine and Estuarine Fish Habitat Partnership",
+       subtitle = 'Biotic components of biotic groups') +
+  scale_y_continuous(expand = c(0, NA), limits = c(0, 150000)) +  
+  theme_minimal()
+```
+
+```{r}
+# Visualization #3: Looking at area of each biotic group
+
+# Find counts separately for easier plotting
+estuary <- estuary %>% 
+  mutate(group = na_if(group, "")) %>%
+  filter(!is.na(group)) %>%  
+  mutate(group = fct_reorder(group, group, .fun = length))  # Order by count
+
+# Account for NA values
+estuary %>% 
+  filter(!is.na(area_km2) & area_km2 > 0) %>%  # Ensure no errors for log(0)
+# Start plotting
+  ggplot(aes(x = group, y = area_km2, fill = group)) +
+  geom_violin(alpha = 0.5, color = NA) +
+  geom_boxplot(width = 0.2, outlier.shape = NA, color = "black") +
+  coord_flip() + # Flip axis for readability
+  scale_y_log10() +  # Log scale to handle the really small numbers
+  labs(title = "Distribution of Area by Biotic Group (Log Scale)", 
+       x = "Group", 
+       y = "Area (km², log scale)",
+       caption = "Source: Pacific Marine and Estuarine Fish Habitat Partnership") +
+  scale_fill_manual(values = c('#C4A9C2','#D8C397', '#A5CEA4','#3BAF85','#91A2D5')) +
+  theme_minimal() +
+  theme(legend.position = "none")
+```
+
+### Questions
+
+-   **1.** What have you learned about your data? Have any potentially interesting patterns emerged?
+
+    I learned that there is very, very little data for the area of each biotic component. I wonder if this is due to limitations in data collection, or if this is reflective of the state of the estuaries.
+
+    Eelgrass makes up a large percentage of the biotic components in estuaries to my surprise, therefore I want to consider taking a look at the other eelgrass data set linked previously. Would it be more informative to take a deeper dive into well documents biota?
+
+-   **2.** In HW #1, you outlined some questions that you wanted to answer using these data. Have you made any strides towards answering those questions? If yes, how so? If no, what next steps do you need to take (e.g. I need to create X plot type, I still need to track down Y data, I need to restructure existing data so that you can visualize it in Z ways, etc.)?
+
+    Area, as mentioned in the last question, seems to not have a lot of data and I would not like to answer that question. Instead, I want to visualize biotic component (or group) loss over time. I think making an animated chart would be really cool!
+
+-   **3.** What challenges do you foresee encountering with your data? These can be data wrangling and / or visualization challenges.
+
+    I'm thinking now that the area results don't make the most sense to me, and I wonder if I did something wrong. I'd really like to use that as a statistic, so I can try to find another data set to supplement this one.
+
+    Furthermore, the definitions of the biotic components/groups overlap, and I wonder if staying at the broader group scale would be more accurate (although I would still include some information about the biotic components).
+
+    I am also worried about mapping this data. I was getting many, many errors about the geometry column so I stuck to more simple plots here.
